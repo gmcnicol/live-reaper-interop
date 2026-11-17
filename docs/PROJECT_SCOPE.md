@@ -2,9 +2,9 @@
 
 ## Objective
 
-Transfer editable arrangement structure between REAPER and Ableton Live, in either direction. Preserve where audio items sit and which portions of their source recordings they use.
+Transfer editable audio and MIDI arrangement structure between REAPER and Ableton Live, in either direction. Preserve where clips sit, which portions of audio sources they use, and MIDI notes plus CC events.
 
-This document describes intended behaviour, not implemented functionality or a guarantee of API support.
+This document describes intended behaviour, not implemented functionality or a guarantee of API support. The [resolved first-transfer scope](https://github.com/gmcnicol/live-reaper-interop/issues/9) expands the original WAV-only proposal to shared audio formats and MIDI notes plus CC; those capabilities require additional research and host validation.
 
 ## Architecture
 
@@ -36,22 +36,26 @@ Record exact Live, Python and REAPER versions, API calls used, observed units, r
 
 If the necessary operations cannot be performed through the selected API, document the blocker and revisit the adapter approach before promising a complete bridge.
 
-## Milestone 1: audio interchange into a fresh destination
+## Milestone 1: audio and MIDI interchange into a fresh destination
 
-Supported input:
+Supported input targets, subject to capability evidence:
 
-- Local PCM WAV sources in formats supported by both hosts.
+- Original audio sources in any format readable by both target host versions, not only WAV. No automatic conversion or rendering.
 - One constant project tempo, one 4/4 time signature and a shared timeline origin.
 - Audio at normal playback speed, with no warping, looping or reversal.
 - One active source take per REAPER item.
-- Flat audio tracks, with no overlapping items on the same track.
-- Non-negative timeline starts.
+- Flat, single-kind audio or MIDI tracks, with no overlapping arrangement clips on the same track. Polyphonic MIDI notes inside a clip are allowed.
+- Non-negative timeline starts and a shared zero.
+- No fades or crossfades.
+- Editable MIDI notes with pitch, onset, duration, velocity and channel, plus timed CC events with channel, controller number and value. Sustain remains CC data rather than rewritten note lengths.
 
-Transfer track names and order, clip names, media references, timeline starts, visible durations and source offsets.
+Transfer track names and order, clip names, audio media references, timeline starts, visible durations and audio source offsets. Preserve non-grid positions, adjacent clips, gaps and repeated audio-source references.
 
-Preflight unsupported constructs before modifying the destination. Do not silently discard them, overwrite other clips, render them or change their timing. Report the affected tracks/items and the reason. Users can prepare a supported project copy explicitly.
+Use faithful best-effort transfer: import supported material and report omitted items or MIDI event types. Skip a clip when its timing or source content cannot be represented correctly; do not silently flatten, render, convert, retime or guess. Preflight before mutation. Invalid transfer data, unresolved required media and unsafe destination changes remain blocking errors. Partial-import recovery details belong to the later contract decision.
 
-Import into a new project/set or an explicitly empty target arrangement. Preserve the exported manifest as the record of the transfer.
+MIDI pitch bend, program changes, aftertouch, release velocity, SysEx and MPE/per-note expression are not first-milestone targets. Instruments and their sound are not transferred.
+
+Import into a new project/set or an explicitly empty target arrangement on every leg. A return import creates a separate arrangement rather than updating the original. Preserve the exported manifest as the record of the transfer.
 
 ## Proposed interchange data
 
@@ -60,16 +64,16 @@ The schema is to be finalised after the feasibility experiment.
 | Data | Intended meaning |
 | --- | --- |
 | Format version | Contract version; reject unknown incompatible versions |
-| Transfer/project identity | Identify related exports without relying on filenames |
 | Origin application and version | Reproduce compatibility findings |
 | Constant tempo and time signature | Define the supported musical timeline |
 | Timeline origin | Align zero between hosts |
-| Track identity, name and order | Reconstruct track layout |
-| Item identity and track identity | Describe item membership and future matching |
+| Track reference, name and order | Reconstruct track layout within this snapshot |
+| Item track reference | Associate each clip with its track within this snapshot |
 | Source identity, path, sample rate and frame count | Resolve and validate source audio |
 | Timeline start/end in seconds and quarter-note beats | Make timing intent and conversion explicit |
 | Source offset in seconds/sample frames | Identify the first audible source position |
 | Clip name | Preserve human-readable labels |
+| MIDI notes and CC events | Preserve the agreed editable musical data, including channels; event coordinates and clip-boundary semantics remain to be decided |
 
 Use explicit units and full numeric precision. Treat elapsed seconds as authoritative for the first audio milestone; beat positions are derived from the constant tempo and provide a consistency check. Do not use displayed bars/beats strings as interchange coordinates.
 
@@ -84,48 +88,34 @@ For REAPER, use its time-map functions when exporting musical coordinates. Varia
 
 Paths are local references, not portable identities. Prefer relative paths when media is explicitly collected beside a manifest; allow path remapping when moving between machines. Confirm source identity before substituting a missing file. Do not modify source recordings.
 
-## Milestone 2: return changes to an existing project
+## Point-in-time boundary
 
-The goal is to export from one host, rearrange in the other and apply the return transfer to the original project without duplicating unchanged items.
+Each import reconstructs the current exported snapshot in a fresh destination, on a best-effort basis. It does not reconcile with an earlier import or modify the original project.
 
-First prove a persistent bridge identity strategy. Do not rely on track names, clip names, array indices or runtime Live object IDs as durable identity on their own. A sidecar mapping may be needed, but its association with clips must survive the supported edits.
-
-Define and test these cases explicitly:
-
-- Save, close and reopen either host.
-- Move a clip in time or to another track.
-- Rename or reorder tracks and clips.
-- Trim a clip or slip its source content.
-- Split a clip into independently identified descendants.
-- Duplicate a clip with a new identity.
-- Add or delete a clip.
-- Reimport the same return manifest twice.
-- Detect unrelated edits made in both hosts since their common export.
-
-Ambiguous identity or conflicting edits must produce a reviewable report rather than guessed matches. Deletion propagation and replacing existing material require explicit import choices. The first interchange milestone does not depend on solving automatic merge.
+Existing-project updates, transfer history, persistent clip matching, identity sidecars, idempotent reimport into existing arrangements, deletion propagation and conflict/merge workflows are outside this effort. No plan for those features is required.
 
 ## Acceptance checks
 
 Use disposable projects with original media kept intact. Test both REAPER → Live → REAPER and Live → REAPER → Live.
 
-The fixture should include multiple tracks, gaps, adjacent clips, repeated references to one recording, non-grid positions and non-zero source offsets. Include recognisable transients to reveal source-offset errors.
+The audio fixture should include multiple tracks, gaps, adjacent clips, repeated references to one recording, non-grid positions and non-zero source offsets. Include recognisable transients to reveal source-offset errors. Begin calibration with PCM WAV, then validate the claimed shared audio-format matrix; WAV-only success does not satisfy the expanded milestone.
+
+Add MIDI fixtures with polyphonic notes, channel distinctions, non-grid note and CC timing, clip cuts and sustain CC events. Validate editable read-back after save/reopen. MIDI API access, timing units and boundary handling remain unverified.
 
 Verify:
 
 - Track order, names and supported clip counts survive.
 - No imported item unexpectedly overlaps or truncates another.
-- Start, end and source offsets match the chosen fixture sample grid within one sample at the fixture's sample rate, including after reopening.
+- Start, end and source offsets match the PCM fixture sample grid within one sample at the fixture's sample rate, including after reopening. Investigate decoder/seek limits separately for other claimed audio formats.
 - The audible source segment is correct; this milestone introduces no resampling or processing.
-- Missing media and unsupported constructs are reported before mutation.
+- Missing required media blocks mutation. Unsupported material produces a faithful partial transfer with a clear omission report, not silent approximation.
 - The original files and source projects are intact.
 
 One-sample accuracy is an acceptance target to measure, not an established guarantee. Record the achieved tolerance and actual API limitations.
 
-For milestone 2, also verify idempotent reimport, persistent identity and conflict reporting.
-
 ## Later work
 
-- MIDI clips and ordinary note events, with explicit treatment of unsupported per-note expression.
+- MIDI event families beyond notes and CC, including pitch bend, program changes, aftertouch, release velocity, SysEx and per-note expression.
 - Tempo and time-signature maps, including tempo ramps.
 - Looping and repeated source regions.
 - Warping/stretch markers and playback-rate mapping.
@@ -137,7 +127,7 @@ Stretch algorithms can sound different even when timing maps translate. Any futu
 
 ## Outside the initial scope
 
-Plug-in state, instruments, device chains, routing, sends, mixer levels, pan, automation, Session View scenes and live synchronisation.
+Plug-in state, instruments, device chains, routing, sends, mixer levels, pan, host automation, Session View scenes and live synchronisation. MIDI CC events are in scope and are distinct from host automation.
 
 ## API references
 
